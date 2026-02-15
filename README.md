@@ -1,4 +1,4 @@
-# User Table — DummyJSON
+# User Table 
 
 Таблица пользователей с сортировкой, фильтрацией и пагинацией. 
 Данные получены через [DummyJSON API](https://dummyjson.com/docs/users).

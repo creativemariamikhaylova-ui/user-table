@@ -10,6 +10,7 @@
   --shadow: 0 24px 60px rgba(10, 10, 10, 0.12);
   --radius: 18px;
   --min-col: 50px;
+  --transition: 0.2s ease;
 }
 
 * {
@@ -26,10 +27,6 @@ body {
   min-height: 100vh;
 }
 
-#root {
-  position: relative;
-}
-
 .page {
   max-width: 1400px;
   margin: 0 auto;
@@ -42,21 +39,16 @@ body {
   margin-bottom: 32px;
 }
 
-.kicker {
-  font-size: 12px;
-  letter-spacing: 0.3em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-
 .title {
   font-size: clamp(28px, 5vw, 56px);
   font-weight: 700;
+  margin: 0;
 }
 
 .subtitle {
   color: var(--muted);
   max-width: 720px;
+  margin: 0;
 }
 
 .panel {
@@ -81,6 +73,12 @@ body {
   color: var(--muted);
 }
 
+.label {
+  font-size: 14px;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
 .actions {
   display: flex;
   flex-wrap: wrap;
@@ -94,20 +92,38 @@ body {
   border-radius: 999px;
   padding: 10px 16px;
   font-weight: 600;
+  font-family: inherit;
+  font-size: inherit;
   cursor: pointer;
-  transition: transform 0.2s ease, box-shadow 0.2s ease, border 0.2s ease;
+  transition: transform var(--transition), box-shadow var(--transition), border-color var(--transition),
+    opacity var(--transition);
 }
 
-.button:hover {
+.button:hover:not(:disabled) {
   transform: translateY(-1px);
   box-shadow: 0 10px 24px rgba(17, 17, 17, 0.12);
   border-color: var(--accent);
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .button.primary {
   background: var(--accent);
   color: #fff;
   border-color: var(--accent);
+}
+
+.close-btn {
+  flex-shrink: 0;
+  padding: 8px 12px;
 }
 
 .table-wrap {
@@ -129,7 +145,7 @@ body {
 
 .table th,
 .table td {
-  padding: 12px 12px;
+  padding: 12px;
   text-align: left;
   border-bottom: 1px solid var(--line);
   font-size: 14px;
@@ -139,11 +155,39 @@ body {
 .table th {
   font-weight: 600;
   position: relative;
-  vertical-align: bottom;
+  vertical-align: top;
+}
+
+.th-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.filter-cell {
+  margin-top: 4px;
+}
+
+.filter-cell input,
+.filter-cell select {
+  width: 100%;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  font-family: inherit;
+  font-size: 12px;
+  background: white;
+}
+
+.filter-cell input:focus,
+.filter-cell select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
 .table tbody tr {
-  transition: background 0.2s ease;
+  transition: background var(--transition);
   cursor: pointer;
 }
 
@@ -163,26 +207,48 @@ body {
   color: inherit;
 }
 
+.sort-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
 .sort-icon {
   font-family: "Source Code Pro", monospace;
   font-size: 12px;
   opacity: 0.7;
 }
 
-.filter-row input,
-.filter-row select {
-  width: 100%;
-  padding: 6px 8px;
-  border-radius: 8px;
-  border: 1px solid var(--line);
-  font-family: inherit;
-  font-size: 12px;
+.resizer {
+  position: absolute;
+  right: 0;
+  top: 0;
+  height: 100%;
+  width: 8px;
+  cursor: col-resize;
+  user-select: none;
+  opacity: 0;
+  transition: opacity var(--transition);
 }
 
-.filter-row input:focus,
-.filter-row select:focus {
-  outline: 2px solid var(--accent-soft);
-  border-color: var(--accent);
+th:hover .resizer {
+  opacity: 1;
+}
+
+.resizer::after {
+  content: "";
+  position: absolute;
+  top: 20%;
+  bottom: 20%;
+  left: 3px;
+  width: 2px;
+  background: rgba(17, 17, 17, 0.2);
+  border-radius: 999px;
+  transition: background var(--transition);
+}
+
+.resizer:hover::after {
+  background: var(--accent);
 }
 
 .pagination {
@@ -199,6 +265,18 @@ body {
   padding: 6px 12px;
   border-radius: 8px;
   cursor: pointer;
+  font-family: inherit;
+  transition: border-color var(--transition), background var(--transition);
+}
+
+.pagination button:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.pagination button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .pagination button:disabled {
@@ -206,41 +284,16 @@ body {
   opacity: 0.5;
 }
 
+.pagination select {
+  font-family: inherit;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+}
+
 .page-info {
   font-size: 13px;
   color: var(--muted);
-}
-
-.resizer {
-  position: absolute;
-  right: 0;
-  top: 0;
-  height: 100%;
-  width: 8px;
-  cursor: col-resize;
-  user-select: none;
-  opacity: 0;
-  transition: opacity 0.2s ease;
-}
-
-th:hover .resizer {
-  opacity: 1;
-}
-
-.resizer::after {
-  content: "";
-  position: absolute;
-  top: 20%;
-  bottom: 20%;
-  left: 3px;
-  width: 2px;
-  background: rgba(17, 17, 17, 0.2);
-  border-radius: 999px;
-  transition: background 0.2s ease;
-}
-
-.resizer:hover::after {
-  background: var(--accent);
 }
 
 .modal-backdrop {

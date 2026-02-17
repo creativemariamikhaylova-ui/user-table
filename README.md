@@ -146,6 +146,6 @@ user-table/
 MIT
 
 👩‍💻 **Автор**
-Mariam Mikhailova
+Maria Mikhailova
 
 GitHub: @creativemariamikhaylova-ui

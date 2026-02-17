@@ -1,17 +1,14 @@
-const { useEffect, useMemo, useRef, useState } = React;
+const useState = React.useState;
+const useEffect = React.useEffect;
+const useCallback = React.useCallback;
+const useMemo = React.useMemo;
+const useRef = React.useRef;
 const html = htm.bind(React.createElement);
-
-const SORT_FIELDS = {
-  fio: "lastName",
-  age: "age",
-  gender: "gender",
-  phone: "phone",
-};
 
 const DEFAULT_WIDTHS = {
   lastName: 150,
   firstName: 140,
-  maidenName: 160,
+  patronymic: 160,
   age: 90,
   gender: 100,
   phone: 180,
@@ -21,110 +18,212 @@ const DEFAULT_WIDTHS = {
 };
 
 const COLUMNS = [
-  { key: "lastName", label: "Фамилия" },
-  { key: "firstName", label: "Имя" },
-  { key: "maidenName", label: "Отчество" },
-  { key: "age", label: "Возраст", numeric: true },
-  { key: "gender", label: "Пол" },
-  { key: "phone", label: "Телефон" },
+  { key: "lastName", label: "Фамилия", sortKey: "fio" },
+  { key: "firstName", label: "Имя", sortKey: "fio" },
+  { 
+    key: "patronymic", 
+    label: "Отчество", 
+    sortKey: "fio",
+    getValue: (u) => u.maidenName || u.middleName || "—",
+  },
+  { key: "age", label: "Возраст", sortKey: "age", numeric: true },
+  { key: "gender", label: "Пол", sortKey: "gender", filterType: "select" },
+  { key: "phone", label: "Телефон", sortKey: "phone" },
   { key: "email", label: "Email" },
-  { key: "country", label: "Страна", getValue: (user) => user.address?.country || "" },
-  { key: "city", label: "Город", getValue: (user) => user.address?.city || "" },
+  { key: "country", label: "Страна", getValue: (u) => u.address?.country || "" },
+  { key: "city", label: "Город", getValue: (u) => u.address?.city || "" },
 ];
 
-const FILTER_KEYS = [
-  "lastName",
-  "firstName",
-  "maidenName",
-  "age",
-  "gender",
-  "phone",
-  "email",
-  "country",
-  "city",
-];
+const FILTER_KEYS = COLUMNS.map((c) => c.key);
+
+const EMPTY_FILTERS = Object.freeze(
+  FILTER_KEYS.reduce((acc, key) => { acc[key] = ""; return acc; }, {})
+);
+
+const DEBOUNCE_MS = 300;
+const API_BASE = "https://dummyjson.com/users";
+
+const getFieldValue = (user, key) => {
+  if (key === "country") return user.address?.country || "";
+  if (key === "city") return user.address?.city || "";
+  if (key === "patronymic") return user.maidenName || user.middleName || "—";
+  return user[key] ?? "";
+};
+
+const normalizeGenderQuery = (value) => {
+  const n = String(value).trim().toLowerCase();
+  if (!n) return "";
+  if (["м", "m", "male"].includes(n)) return "male";
+  if (["ж", "f", "female"].includes(n)) return "female";
+  return n;
+};
+
+const getFullName = (user) => {
+  const patronymic = user.maidenName || user.middleName || "";
+  return `${user.lastName} ${user.firstName} ${patronymic}`.trim().toLowerCase();
+};
+
+function useDebounce(value, delay) {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const id = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(id);
+  }, [value, delay]);
+  return debounced;
+}
+
+function UserModal({ user, onClose }) {
+  useEffect(() => {
+    const handler = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [onClose]);
+
+  if (!user) return null;
+
+  return html`
+    <div className="modal-backdrop" onClick=${onClose} role="dialog" aria-modal="true">
+      <div className="modal" onClick=${(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div>
+            <div className="modal-title">
+              ${user.lastName} ${user.firstName} ${user.maidenName}
+            </div>
+            <span className="badge">
+              ${user.gender === "male" ? "Мужчина" : "Женщина"}, ${user.age} лет
+            </span>
+          </div>
+          <button className="button close-btn" type="button" onClick=${onClose} aria-label="Закрыть">
+            ✕
+          </button>
+        </div>
+        <div className="modal-grid">
+          <div>
+            <div className="label">Телефон</div>
+            <div>${user.phone}</div>
+          </div>
+          <div>
+            <div className="label">Email</div>
+            <div>${user.email}</div>
+          </div>
+          <div>
+            <div className="label">Рост / Вес</div>
+            <div>${user.height} см · ${user.weight} кг</div>
+          </div>
+          <div>
+            <div className="label">Адрес</div>
+            <div>${user.address?.address || "—"}</div>
+            <div>${user.address?.city || "—"}, ${user.address?.state || "—"}</div>
+            <div>${user.address?.country || "—"}, ${user.address?.postalCode || "—"}</div>
+          </div>
+          <div>
+            <img className="avatar" src=${user.image} alt="Аватар" loading="lazy" />
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
 
 function App() {
   const [users, setUsers] = useState([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const [total, setTotal] = useState(0);
   const [sort, setSort] = useState({ key: null, order: null });
-  const [filters, setFilters] = useState(
-    FILTER_KEYS.reduce((acc, key) => {
-      acc[key] = "";
-      return acc;
-    }, {})
-  );
+  const [filters, setFilters] = useState({ ...EMPTY_FILTERS });
   const [selectedUser, setSelectedUser] = useState(null);
   const [columnWidths, setColumnWidths] = useState({ ...DEFAULT_WIDTHS });
   const resizeRef = useRef(null);
   const abortRef = useRef(null);
 
+  const debouncedFilters = useDebounce(filters, DEBOUNCE_MS);
+
   const filtersActive = useMemo(
-    () => FILTER_KEYS.some((key) => String(filters[key]).trim() !== ""),
-    [filters]
+    () => FILTER_KEYS.some((k) => String(debouncedFilters[k]).trim() !== ""),
+    [debouncedFilters]
   );
 
-  const displayUsers = useMemo(() => users, [users]);
+  const buildApiUrl = useCallback(() => {
+    const activeFilters = Object.entries(debouncedFilters)
+      .filter(([_, v]) => v.trim() !== "");
+    
+    let url;
+    
+    if (activeFilters.length > 0) {
+      url = `${API_BASE}/filter?limit=${pageSize}&skip=${(page - 1) * pageSize}`;
+      
+      activeFilters.forEach(([key, value]) => {
+        if (key === 'gender') {
+          const genderValue = normalizeGenderQuery(value);
+          if (genderValue) {
+            url += `&key=gender&value=${genderValue}`;
+          }
+        } else if (key === 'country') {
+          url += `&key=address.country&value=${encodeURIComponent(value)}`;
+        } else if (key === 'city') {
+          url += `&key=address.city&value=${encodeURIComponent(value)}`;
+        } else {
+          url += `&key=${key}&value=${encodeURIComponent(value)}`;
+        }
+      });
+      
+      if (sort.key && sort.order && sort.key !== 'fio') {
+        url += `&sortBy=${sort.key}&order=${sort.order}`;
+      }
+    } else {
+      url = `${API_BASE}?limit=${pageSize}&skip=${(page - 1) * pageSize}`;
+      
+      if (sort.key && sort.order && sort.key !== 'fio') {
+        url += `&sortBy=${sort.key}&order=${sort.order}`;
+      }
+    }
+    
+    return url;
+  }, [page, pageSize, sort.key, sort.order, debouncedFilters]);
 
-  useEffect(() => {
-    fetchUsers();
-    return () => {
-      if (abortRef.current) abortRef.current.abort();
-    };
-  }, [page, pageSize, sort, filters]);
-
-  const fetchUsers = async () => {
+  const fetchUsers = useCallback(async () => {
     if (abortRef.current) abortRef.current.abort();
     const controller = new AbortController();
     abortRef.current = controller;
-
-    const params = new URLSearchParams();
-    const sortBy = sort.key ? SORT_FIELDS[sort.key] : null;
-    if (sortBy && sort.order) {
-      params.set("sortBy", sortBy);
-      params.set("order", sort.order);
-    }
-
-    // Исправлено: всегда запрашиваем всех пользователей, чтобы получать больше 50
-    params.set("limit", 0);
-
-    const url = `https://dummyjson.com/users?${params.toString()}`;
 
     setLoading(true);
     setError("");
 
     try {
-      const response = await fetch(url, { signal: controller.signal });
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+      const url = buildApiUrl();
+      const res = await fetch(url, { signal: controller.signal });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      
+      let usersData = [];
+      let totalCount = 0;
+      
+      if (data.users) {
+        usersData = data.users;
+        totalCount = data.total;
+      } else if (Array.isArray(data)) {
+        usersData = data;
+        totalCount = data.length;
       }
-      const data = await response.json();
-      let fetched = Array.isArray(data.users) ? data.users : [];
       
-      // Применяем фильтры на клиенте
-      let filtered = fetched;
-      if (filtersActive) {
-        filtered = applyFilters(fetched, filters);
+      if (sort.key === 'fio' && sort.order && usersData.length > 0) {
+        usersData = [...usersData].sort((a, b) => {
+          const fioA = getFullName(a);
+          const fioB = getFullName(b);
+          
+          if (sort.order === 'asc') {
+            return fioA.localeCompare(fioB);
+          } else {
+            return fioB.localeCompare(fioA);
+          }
+        });
       }
       
-      // Применяем сортировку на клиенте
-      const sorted = applySorting(filtered, sort);
-      
-      // Обновляем общее количество
-      setTotal(sorted.length);
-      
-      // Применяем пагинацию на клиенте
-      const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
-      const safePage = Math.min(page, totalPages);
-      if (safePage !== page) setPage(safePage);
-      const paged = sorted.slice((safePage - 1) * pageSize, safePage * pageSize);
-      
-      setUsers(paged);
-      
+      setUsers(usersData);
+      setTotal(totalCount);
     } catch (err) {
       if (err.name !== "AbortError") {
         setError("Не удалось загрузить пользователей. Проверьте соединение и повторите попытку.");
@@ -132,390 +231,187 @@ function App() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [buildApiUrl, sort.key, sort.order]);
 
-  const normalizeGenderQuery = (value) => {
-    const normalized = String(value).trim().toLowerCase();
-    if (!normalized) return "";
-    if (["м", "m", "male"].includes(normalized)) return "male";
-    if (["ж", "f", "female"].includes(normalized)) return "female";
-    return normalized;
-  };
+  useEffect(() => {
+    fetchUsers();
+    return () => { if (abortRef.current) abortRef.current.abort(); };
+  }, [fetchUsers]);
 
-  const applyFilters = (items, activeFilters) => {
-    const normalized = Object.fromEntries(
-      Object.entries(activeFilters).map(([key, value]) => [key, String(value).trim().toLowerCase()])
-    );
-    return items.filter((user) => {
-      return FILTER_KEYS.every((key) => {
-        const query = normalized[key];
-        if (!query) return true;
-        const value = getFieldValue(user, key);
-        if (key === "gender") {
-          const normalizedQuery = normalizeGenderQuery(query);
-          return String(value).toLowerCase() === normalizedQuery;
-        }
-        return String(value).toLowerCase().includes(query);
-      });
-    });
-  };
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
-  const applySorting = (items, sortState) => {
-    if (!sortState.key || !sortState.order) return items;
-    
-    const direction = sortState.order === "asc" ? 1 : -1;
-    
-    return [...items].sort((a, b) => {
-      if (sortState.key === "fio") {
-        const aName = `${a.lastName} ${a.firstName} ${a.maidenName}`.trim();
-        const bName = `${b.lastName} ${b.firstName} ${b.maidenName}`.trim();
-        return aName.localeCompare(bName, "ru") * direction;
-      }
-      
-      let aVal = a[sortState.key];
-      let bVal = b[sortState.key];
-      
-      if (sortState.key === "age") {
-        return (aVal - bVal) * direction;
-      }
-      
-      if (sortState.key === "gender") {
-        const genderOrder = { male: 1, female: 2 };
-        return ((genderOrder[aVal] || 0) - (genderOrder[bVal] || 0)) * direction;
-      }
-      
-      return String(aVal).localeCompare(String(bVal)) * direction;
-    });
-  };
+  useEffect(() => {
+    if (page > totalPages) setPage(totalPages);
+  }, [page, totalPages]);
 
-  const getFieldValue = (user, key) => {
-    if (key === "country") return user.address?.country || "";
-    if (key === "city") return user.address?.city || "";
-    return user[key] ?? "";
-  };
-
-  const toggleSort = (key) => {
+  const toggleSort = useCallback((key) => {
     setPage(1);
     setSort((prev) => {
       if (prev.key !== key) return { key, order: "asc" };
       if (prev.order === "asc") return { key, order: "desc" };
-      if (prev.order === "desc") return { key: null, order: null };
-      return { key, order: "asc" };
+      return { key: null, order: null };
     });
-  };
+  }, []);
 
-  const sortLabel = (key) => {
-    if (sort.key !== key || !sort.order) return "—";
-    return sort.order === "asc" ? "↑" : "↓";
-  };
+  const sortLabel = useCallback(
+    (key) => {
+      if (sort.key !== key || !sort.order) return "—";
+      return sort.order === "asc" ? "↑" : "↓";
+    },
+    [sort]
+  );
 
-  const updateFilter = (key, value) => {
+  const updateFilter = useCallback((key, value) => {
     setPage(1);
     setFilters((prev) => ({ ...prev, [key]: value }));
-  };
+  }, []);
 
-  const resetFilters = () => {
-    setFilters(
-      FILTER_KEYS.reduce((acc, key) => {
-        acc[key] = "";
-        return acc;
-      }, {})
-    );
+  const resetFilters = useCallback(() => {
+    setFilters({ ...EMPTY_FILTERS });
     setPage(1);
-  };
+  }, []);
 
-  const startResize = (key, event) => {
-    event.preventDefault();
-    const handleMove = (moveEvent) => {
-      const current = resizeRef.current;
-      if (!current) return;
-      const delta = moveEvent.clientX - current.startX;
-      const nextWidth = Math.max(50, current.startWidth + delta);
-      setColumnWidths((prev) => ({ ...prev, [current.key]: nextWidth }));
-    };
-    const handleUp = () => {
-      resizeRef.current = null;
-      window.removeEventListener("mousemove", handleMove);
-      window.removeEventListener("mouseup", handleUp);
-    };
+  const closeModal = useCallback(() => setSelectedUser(null), []);
 
-    resizeRef.current = {
-      key,
-      startX: event.clientX,
-      startWidth: columnWidths[key] || DEFAULT_WIDTHS[key] || 120,
-    };
-    window.addEventListener("mousemove", handleMove);
-    window.addEventListener("mouseup", handleUp);
-  };
-
-  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const startResize = useCallback(
+    (key, event) => {
+      event.preventDefault();
+      const handleMove = (e) => {
+        const cur = resizeRef.current;
+        if (!cur) return;
+        const delta = e.clientX - cur.startX;
+        setColumnWidths((prev) => ({ ...prev, [cur.key]: Math.max(50, cur.startWidth + delta) }));
+      };
+      const handleUp = () => {
+        resizeRef.current = null;
+        window.removeEventListener("mousemove", handleMove);
+        window.removeEventListener("mouseup", handleUp);
+      };
+      resizeRef.current = {
+        key,
+        startX: event.clientX,
+        startWidth: columnWidths[key] || DEFAULT_WIDTHS[key] || 120,
+      };
+      window.addEventListener("mousemove", handleMove);
+      window.addEventListener("mouseup", handleUp);
+    },
+    [columnWidths]
+  );
 
   return html`
     <div className="page">
       <header className="header">
-        <div className="title">Таблица пользователей</div>
-        <div className="subtitle">
-          Серверная сортировка и постраничная загрузка с дополнительной фильтрацией. Кликните строку, чтобы
-          открыть карточку пользователя.
-        </div>
+        <h1 className="title">Таблица пользователей</h1>
+        <p className="subtitle">
+          Сортировка, фильтрация и постраничная навигация. Кликните строку, чтобы открыть карточку пользователя.
+        </p>
       </header>
 
       <section className="panel">
         <div className="toolbar">
-          <div className="status">
-            ${loading ? "Загрузка данных..." : `Показано ${displayUsers.length} из ${total} пользователей`}
+          <div className="status" aria-live="polite">
+            ${loading ? "Загрузка данных..." : `Показано ${users.length} из ${total} пользователей`}
           </div>
           <div className="actions">
-            <button className="button" type="button" onClick=${resetFilters}>
+            <button className="button" type="button" onClick=${resetFilters} disabled=${!filtersActive}>
               Сбросить фильтры
             </button>
-            <button className="button primary" type="button" onClick=${fetchUsers}>
+            <button className="button primary" type="button" onClick=${fetchUsers} disabled=${loading}>
               Обновить
             </button>
           </div>
         </div>
 
         <div className="table-wrap">
-          <table className="table">
+          <table className="table" role="grid">
             <thead>
               <tr>
-                <th style=${{ width: columnWidths.lastName }}>
-                  <button className="sort-btn" type="button" onClick=${() => toggleSort("fio")}>
-                    Фамилия
-                    <span className="sort-icon">${sortLabel("fio")}</span>
-                  </button>
-                  <span className="resizer" onMouseDown=${(event) => startResize("lastName", event)}></span>
-                </th>
-                <th style=${{ width: columnWidths.firstName }}>
-                  <button className="sort-btn" type="button" onClick=${() => toggleSort("fio")}>
-                    Имя
-                    <span className="sort-icon">${sortLabel("fio")}</span>
-                  </button>
-                  <span className="resizer" onMouseDown=${(event) => startResize("firstName", event)}></span>
-                </th>
-                <th style=${{ width: columnWidths.maidenName }}>
-                  <button className="sort-btn" type="button" onClick=${() => toggleSort("fio")}>
-                    Отчество
-                    <span className="sort-icon">${sortLabel("fio")}</span>
-                  </button>
-                  <span className="resizer" onMouseDown=${(event) => startResize("maidenName", event)}></span>
-                </th>
-                <th style=${{ width: columnWidths.age }}>
-                  <button className="sort-btn" type="button" onClick=${() => toggleSort("age")}>
-                    Возраст
-                    <span className="sort-icon">${sortLabel("age")}</span>
-                  </button>
-                  <span className="resizer" onMouseDown=${(event) => startResize("age", event)}></span>
-                </th>
-                <th style=${{ width: columnWidths.gender }}>
-                  <button className="sort-btn" type="button" onClick=${() => toggleSort("gender")}>
-                    Пол
-                    <span className="sort-icon">${sortLabel("gender")}</span>
-                  </button>
-                  <span className="resizer" onMouseDown=${(event) => startResize("gender", event)}></span>
-                </th>
-                <th style=${{ width: columnWidths.phone }}>
-                  <button className="sort-btn" type="button" onClick=${() => toggleSort("phone")}>
-                    Телефон
-                    <span className="sort-icon">${sortLabel("phone")}</span>
-                  </button>
-                  <span className="resizer" onMouseDown=${(event) => startResize("phone", event)}></span>
-                </th>
-                <th style=${{ width: columnWidths.email }}>
-                  Email
-                  <span className="resizer" onMouseDown=${(event) => startResize("email", event)}></span>
-                </th>
-                <th style=${{ width: columnWidths.country }}>
-                  Страна
-                  <span className="resizer" onMouseDown=${(event) => startResize("country", event)}></span>
-                </th>
-                <th style=${{ width: columnWidths.city }}>
-                  Город
-                  <span className="resizer" onMouseDown=${(event) => startResize("city", event)}></span>
-                </th>
-              </tr>
-              
-              <tr className="filter-row">
-                <th>
-                  <input
-                    type="text"
-                    placeholder="Фамилия"
-                    value=${filters.lastName}
-                    onChange=${(event) => updateFilter("lastName", event.target.value)}
-                  />
-                </th>
-                <th>
-                  <input
-                    type="text"
-                    placeholder="Имя"
-                    value=${filters.firstName}
-                    onChange=${(event) => updateFilter("firstName", event.target.value)}
-                  />
-                </th>
-                <th>
-                  <input
-                    type="text"
-                    placeholder="Отчество"
-                    value=${filters.maidenName}
-                    onChange=${(event) => updateFilter("maidenName", event.target.value)}
-                  />
-                </th>
-                <th>
-                  <input
-                    type="text"
-                    placeholder="Возраст"
-                    value=${filters.age}
-                    onChange=${(event) => updateFilter("age", event.target.value)}
-                  />
-                </th>
-                <th>
-                  <select
-                    value=${filters.gender}
-                    onChange=${(event) => updateFilter("gender", event.target.value)}
-                  >
-                    <option value="">Все</option>
-                    <option value="male">М</option>
-                    <option value="female">Ж</option>
-                  </select>
-                </th>
-                <th>
-                  <input
-                    type="text"
-                    placeholder="Телефон"
-                    value=${filters.phone}
-                    onChange=${(event) => updateFilter("phone", event.target.value)}
-                  />
-                </th>
-                <th>
-                  <input
-                    type="text"
-                    placeholder="Email"
-                    value=${filters.email}
-                    onChange=${(event) => updateFilter("email", event.target.value)}
-                  />
-                </th>
-                <th>
-                  <input
-                    type="text"
-                    placeholder="Страна"
-                    value=${filters.country}
-                    onChange=${(event) => updateFilter("country", event.target.value)}
-                  />
-                </th>
-                <th>
-                  <input
-                    type="text"
-                    placeholder="Город"
-                    value=${filters.city}
-                    onChange=${(event) => updateFilter("city", event.target.value)}
-                  />
-                </th>
+                ${COLUMNS.map((col) => {
+                  const width = columnWidths[col.key];
+                  return html`
+                    <th key=${col.key} style=${{ width }}>
+                      <div className="th-content">
+                        ${col.sortKey ? html`
+                          <button 
+                            className="sort-btn" 
+                            type="button" 
+                            onClick=${() => toggleSort(col.sortKey)}
+                            aria-sort=${sort.key === col.sortKey ? sort.order : 'none'}
+                          >
+                            ${col.label}
+                            <span className="sort-icon" aria-hidden="true">${sortLabel(col.sortKey)}</span>
+                          </button>
+                        ` : col.label}
+                        
+                        <div className="filter-cell">
+                          ${col.filterType === "select" ? html`
+                            <select 
+                              value=${filters[col.key] || ''} 
+                              onChange=${(e) => updateFilter(col.key, e.target.value)}
+                              onClick=${(e) => e.stopPropagation()}
+                            >
+                              <option value="">Все</option>
+                              <option value="male">М</option>
+                              <option value="female">Ж</option>
+                            </select>
+                          ` : html`
+                            <input
+                              type="text"
+                              placeholder="Фильтр..."
+                              value=${filters[col.key] || ''}
+                              onChange=${(e) => updateFilter(col.key, e.target.value)}
+                              onClick=${(e) => e.stopPropagation()}
+                            />
+                          `}
+                        </div>
+                      </div>
+                      <span className="resizer" onMouseDown=${(e) => startResize(col.key, e)} />
+                    </th>
+                  `;
+                })}
               </tr>
             </thead>
             <tbody>
-              ${displayUsers.map(
-                (user) => html`
-                  <tr key=${user.id} onClick=${() => setSelectedUser(user)}>
-                    <td style=${{ width: columnWidths.lastName }}>${user.lastName}</td>
-                    <td style=${{ width: columnWidths.firstName }}>${user.firstName}</td>
-                    <td style=${{ width: columnWidths.maidenName }}>${user.maidenName}</td>
-                    <td style=${{ width: columnWidths.age }}>${user.age}</td>
-                    <td style=${{ width: columnWidths.gender }}>${user.gender === "male" ? "М" : "Ж"}</td>
-                    <td style=${{ width: columnWidths.phone }}>${user.phone}</td>
-                    <td style=${{ width: columnWidths.email }}>${user.email}</td>
-                    <td style=${{ width: columnWidths.country }}>${user.address?.country}</td>
-                    <td style=${{ width: columnWidths.city }}>${user.address?.city}</td>
-                  </tr>
-                `
-              )}
+              ${loading
+                ? html`<tr><td colSpan=${COLUMNS.length} className="empty">Загрузка...</td></tr>`
+                : users.length === 0
+                  ? html`<tr><td colSpan=${COLUMNS.length} className="empty">Нет данных по выбранным фильтрам.</td></tr>`
+                  : users.map((user) => html`
+                    <tr key=${user.id} onClick=${() => setSelectedUser(user)}>
+                      ${COLUMNS.map((col) => {
+                        const val = col.getValue ? col.getValue(user) : user[col.key];
+                        const display = col.key === "gender" 
+                          ? (val === "male" ? "М" : val === "female" ? "Ж" : val)
+                          : val;
+                        return html`<td key=${col.key} style=${{ width: columnWidths[col.key] }}>${display}</td>`;
+                      })}
+                    </tr>
+                  `)}
             </tbody>
           </table>
-          ${!loading && displayUsers.length === 0
-            ? html`<div className="empty">Нет данных по выбранным фильтрам.</div>`
-            : null}
         </div>
 
-        <div className="pagination">
-          <button type="button" onClick=${() => setPage(1)} disabled=${page === 1}>
-            «
-          </button>
-          <button
-            type="button"
-            onClick=${() => setPage((prev) => Math.max(1, prev - 1))}
-            disabled=${page === 1}
-          >
-            ‹
-          </button>
-          <span className="page-info">
-            Страница ${page} из ${totalPages}
-          </span>
-          <button
-            type="button"
-            onClick=${() => setPage((prev) => Math.min(totalPages, prev + 1))}
-            disabled=${page === totalPages}
-          >
-            ›
-          </button>
-          <button type="button" onClick=${() => setPage(totalPages)} disabled=${page === totalPages}>
-            »
-          </button>
+        <nav className="pagination" aria-label="Навигация по страницам">
+          <button type="button" onClick=${() => setPage(1)} disabled=${page === 1} aria-label="Первая страница">«</button>
+          <button type="button" onClick=${() => setPage((p) => Math.max(1, p - 1))} disabled=${page === 1} aria-label="Предыдущая страница">‹</button>
+          <span className="page-info">Страница ${page} из ${totalPages}</span>
+          <button type="button" onClick=${() => setPage((p) => Math.min(totalPages, p + 1))} disabled=${page === totalPages} aria-label="Следующая страница">›</button>
+          <button type="button" onClick=${() => setPage(totalPages)} disabled=${page === totalPages} aria-label="Последняя страница">»</button>
           <label className="page-info">
-            Показать по
-            <select value=${pageSize} onChange=${(event) => setPageSize(Number(event.target.value))}>
-              ${[5, 10, 20, 50].map((size) => html`<option key=${size} value=${size}>${size}</option>`)}
+            Показать по 
+            <select value=${pageSize} onChange=${(e) => { setPageSize(Number(e.target.value)); setPage(1); }}>
+              ${[5, 10, 20, 50].map((s) => html`<option key=${s} value=${s}>${s}</option>`)}
             </select>
           </label>
-        </div>
+        </nav>
 
-        ${error ? html`<div className="error">${error}</div>` : null}
+        ${error ? html`<div className="error" role="alert">${error}</div>` : null}
       </section>
 
-      ${selectedUser
-        ? html`
-            <div className="modal-backdrop" onClick=${() => setSelectedUser(null)}>
-              <div className="modal" onClick=${(event) => event.stopPropagation()}>
-                <div className="modal-header">
-                  <div>
-                    <div className="modal-title">
-                      ${selectedUser.lastName} ${selectedUser.firstName} ${selectedUser.maidenName}
-                    </div>
-                    <span className="badge">
-                      ${selectedUser.gender === "male" ? "Мужчина" : "Женщина"}, ${selectedUser.age} лет
-                    </span>
-                  </div>
-                  <button className="button" type="button" onClick=${() => setSelectedUser(null)}>
-                    ✕
-                  </button>
-                </div>
-                <div className="modal-grid">
-                  <div>
-                    <div className="status">Телефон</div>
-                    <div>${selectedUser.phone}</div>
-                  </div>
-                  <div>
-                    <div className="status">Email</div>
-                    <div>${selectedUser.email}</div>
-                  </div>
-                  <div>
-                    <div className="status">Рост / Вес</div>
-                    <div>${selectedUser.height} см · ${selectedUser.weight} кг</div>
-                  </div>
-                  <div>
-                    <div className="status">Адрес</div>
-                    <div>${selectedUser.address?.address || '—'}</div>
-                    <div>${selectedUser.address?.city || '—'}, ${selectedUser.address?.state || '—'}</div>
-                    <div>${selectedUser.address?.country || '—'}, ${selectedUser.address?.postalCode || '—'}</div>
-                  </div>
-                  <div>
-                    <img className="avatar" src=${selectedUser.image} alt="Аватар" />
-                  </div>
-                </div>
-              </div>
-            </div>
-          `
-        : null}
+      ${selectedUser ? html`<${UserModal} user=${selectedUser} onClose=${closeModal} />` : null}
     </div>
   `;
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(html`<${App} />`);
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(html`<${App} />`);

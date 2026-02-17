@@ -147,5 +147,3 @@ MIT
 
 👩‍💻 **Автор**
 Maria Mikhailova
-
-GitHub: @creativemariamikhaylova-ui
